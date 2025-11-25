@@ -1,1 +1,5 @@
-{"rewrites":[{"source":"/(.*)","destination":"/index.html"}]}
+{
+  "installCommand": "cd server && npm install",
+  "buildCommand": "cd server && npm run build",
+  "outputDirectory": "server/.next"
+}

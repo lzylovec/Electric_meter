@@ -118,6 +118,26 @@ export default function IndexPage() {
     )
   }
 
+  async function handleExport() {
+    if (!consumption || !groups || !prices) return;
+    const hdr1 = ['时间', ...hours()];
+    const hdr2 = ['价格梯度', ...groups.labels];
+    const rowQty = ['电量(MWh)', ...consumption];
+    const rowPrice = ['电价(元/MWh)', ...prices.pricePerHour];
+    const rowIncome = ['小时收入(元)', ...consumption.map((v, i) => v * prices.pricePerHour[i])];
+    const totalRow = ['合计收入(元)', ...Array(23).fill(''), prices.revenue, '目标:' + (parseFloat(expected || '0'))];
+    const aoa = [hdr1, hdr2, rowQty, rowPrice, rowIncome, totalRow];
+    const XLSX = await import('xlsx');
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 12 }, ...Array(24).fill({ wch: 10 })];
+    XLSX.utils.book_append_sheet(wb, ws, '表格结果');
+    const ts = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const name = `表格结果-${scope}-${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}.xlsx`;
+    XLSX.writeFile(wb, name);
+  }
+
   async function handleCalculate() {
     setError('');
     const exp = parseFloat(expected); if (isNaN(exp) || exp <= 0) { setError('请输入有效的期望总收入'); return }
@@ -138,6 +158,21 @@ export default function IndexPage() {
   }
 
   useEffect(() => { if (consumption && prices) renderChart(consumption, prices.pricePerHour) }, [consumption, prices]);
+
+  useEffect(() => {
+    function send() {
+      try {
+        const data = new Blob([JSON.stringify({ t: Date.now() })], { type: 'application/json' });
+        if (navigator && navigator.sendBeacon) navigator.sendBeacon('/api/cleanup', data);
+      } catch { }
+    }
+    window.addEventListener('pagehide', send);
+    window.addEventListener('beforeunload', send);
+    return () => {
+      window.removeEventListener('pagehide', send);
+      window.removeEventListener('beforeunload', send);
+    }
+  }, []);
 
   function recomputeWithGroups() {
     if (!basePrices || !consumption) return;
@@ -238,6 +273,9 @@ export default function IndexPage() {
 
         <h2>表格结果</h2>
         {renderTable()}
+        <div className={styles.controls}>
+          <button disabled={!prices} onClick={handleExport}>导出表格结果</button>
+        </div>
 
         <h2>图表展示</h2>
         <div className={styles.chartWrap}><canvas ref={chartRef} height="140" /></div>

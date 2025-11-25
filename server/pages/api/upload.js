@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import formidable from 'formidable';
 import XLSX from 'xlsx';
 
@@ -51,14 +52,12 @@ function parseCsvText(text) {
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:8000');
-  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method Not Allowed' }); return; }
 
-  const uploadDir = path.join(process.cwd(), 'uploads');
-  ensureDir(uploadDir);
+  const isVercel = !!process.env.VERCEL || !!process.env.NOW_REGION;
+  const uploadDir = isVercel ? os.tmpdir() : path.join(process.cwd(), 'uploads');
+  if (!isVercel) ensureDir(uploadDir);
   const form = formidable({ uploadDir, keepExtensions: true });
 
   const result = await new Promise((resolve, reject) => {
