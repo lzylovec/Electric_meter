@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import styles from './index.module.css';
-import { Chart } from 'chart.js/auto';
+ 
 
 function fmt(n){if(!isFinite(n))return '--';return Number(n).toFixed(4)}
 function fmtMoney(n){if(!isFinite(n))return '--';return Number(n).toFixed(2)}
@@ -47,7 +47,8 @@ if(!json||!json.sums||json.sums.length!==24)return null;
 return {sums:json.sums,companies:json.companies||[]};
 }
 
-function renderChart(cons,pph){
+async function renderChart(cons,pph){
+const { Chart } = await import('chart.js/auto');
 const ctx=chartRef.current; if(!ctx) return;
 const labels=hours();
 const dataBar={label:'用电量(MWh)',data:cons,backgroundColor:'#34d399'};
