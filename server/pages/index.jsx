@@ -33,11 +33,16 @@ export default function IndexPage() {
   const [scope, setScope] = useState('汇总(全部)');
   const [consumption, setConsumption] = useState(null);
   const [groups, setGroups] = useState(null);
+  const [basePrices, setBasePrices] = useState(null);
   const [prices, setPrices] = useState(null);
   const [companies, setCompanies] = useState([]);
   const [selected, setSelected] = useState('__all__');
   const [error, setError] = useState('');
   const chartRef = useRef(null); const chartInstance = useRef(null);
+  const [adjustSelected, setAdjustSelected] = useState([]);
+  const [adjustGroups, setAdjustGroups] = useState([]);
+  const lastSelIdxRef = useRef(null);
+  const groupCounterRef = useRef(1);
 
   async function parseViaBackend(f) {
     const fd = new FormData(); fd.append('file', f);
@@ -70,7 +75,33 @@ export default function IndexPage() {
       <div className={styles.tableWrap}>
         <table>
           <thead>
-            <tr>{hdr1.map((c, i) => (<th key={'h1' + i}>{c}</th>))}</tr>
+            <tr>{hdr1.map((c, i) => {
+              if (i === 0) return <th key={'h1' + i}>{c}</th>;
+              const idx = i - 1;
+              const isSel = adjustSelected.includes(idx);
+              const cls = isSel ? styles.selectedCol : '';
+              return (
+                <th
+                  key={'h1' + i}
+                  className={cls}
+                  onClick={e => {
+                    const shift = e.shiftKey;
+                    if (shift && lastSelIdxRef.current !== null && lastSelIdxRef.current !== undefined) {
+                      const a = Math.min(lastSelIdxRef.current, idx);
+                      const b = Math.max(lastSelIdxRef.current, idx);
+                      const set = new Set(adjustSelected);
+                      for (let k = a; k <= b; k++) set.add(k);
+                      setAdjustSelected(Array.from(set).sort((x, y) => x - y));
+                    } else {
+                      const set = new Set(adjustSelected);
+                      if (set.has(idx)) set.delete(idx); else set.add(idx);
+                      setAdjustSelected(Array.from(set).sort((x, y) => x - y));
+                      lastSelIdxRef.current = idx;
+                    }
+                  }}
+                >{c}</th>
+              )
+            })}</tr>
             <tr>{hdr2.map((c, i) => {
               const cls = i === 0 ? '' : (c === '低' ? styles.levelLow : (c === '中' ? styles.levelMid : styles.levelHigh));
               const Tag = i === 0 ? 'th' : 'td';
@@ -95,7 +126,7 @@ export default function IndexPage() {
     if (!data) { setError('后端解析失败，请检查文件格式'); return }
     setParsed(data); setCompanies(data.companies || []); setSelected('__all__'); setScope('汇总(全部)');
     const cons = data.sums; const grp = classify(cons); const pr = computePrices(cons, grp, exp);
-    setConsumption(cons); setGroups(grp); setPrices(pr); renderChart(cons, pr.pricePerHour);
+    setConsumption(cons); setGroups(grp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); renderChart(cons, pr.pricePerHour);
   }
 
   function recomputeForSelection(sel) {
@@ -103,10 +134,45 @@ export default function IndexPage() {
     let cons = null; let scope = '';
     if (sel === '__all__') { cons = parsed.sums; scope = '汇总(全部)' } else { const idx = parseInt(sel, 10); if (isNaN(idx) || !parsed.companies[idx]) return; cons = parsed.companies[idx].values; scope = parsed.companies[idx].name }
     const grp = classify(cons); const pr = computePrices(cons, grp, exp);
-    setConsumption(cons); setGroups(grp); setPrices(pr); setScope(scope); renderChart(cons, pr.pricePerHour);
+    setConsumption(cons); setGroups(grp); setBasePrices(pr); setPrices(pr); setScope(scope); setAdjustSelected([]); setAdjustGroups([]); renderChart(cons, pr.pricePerHour);
   }
 
   useEffect(() => { if (consumption && prices) renderChart(consumption, prices.pricePerHour) }, [consumption, prices]);
+
+  function recomputeWithGroups() {
+    if (!basePrices || !consumption) return;
+    let pph = basePrices.pricePerHour.slice();
+    for (const g of adjustGroups) {
+      const f = parseFloat(g.factor);
+      if (!isNaN(f) && f > 0) {
+        for (const i of g.cols) { if (pph[i] !== undefined) pph[i] = pph[i] * f }
+      }
+    }
+    let revenue = 0; for (let i = 0; i < consumption.length; i++) revenue += consumption[i] * pph[i];
+    setPrices({ ...basePrices, pricePerHour: pph, revenue });
+  }
+
+  useEffect(() => { recomputeWithGroups() }, [adjustGroups, basePrices, consumption]);
+
+  function addSelectionAsGroup() {
+    if (!adjustSelected.length) return;
+    const id = 'g' + groupCounterRef.current++;
+    const cols = Array.from(new Set(adjustSelected)).sort((a, b) => a - b);
+    setAdjustGroups([...adjustGroups, { id, cols, factor: '' }]);
+    setAdjustSelected([]);
+    lastSelIdxRef.current = null;
+  }
+
+  function removeGroup(id) {
+    setAdjustGroups(adjustGroups.filter(g => g.id !== id));
+  }
+
+  function clearAllGroups() {
+    setAdjustGroups([]);
+    setAdjustSelected([]);
+    lastSelIdxRef.current = null;
+    if (basePrices) setPrices(basePrices);
+  }
 
   return (
     <div className={styles.container}>
@@ -122,7 +188,7 @@ export default function IndexPage() {
         </div>
         <div className={styles.field}>
           <label htmlFor="expectedRevenue">期望总收入（元）</label>
-          <input id="expectedRevenue" type="number" step="0.01" value={expected} onChange={e => { setExpected(e.target.value); if (consumption && groups) { const exp = parseFloat(e.target.value); if (!isNaN(exp) && exp > 0) { const pr = computePrices(consumption, groups, exp); setPrices(pr); } } }} placeholder="例如 100000" />
+          <input id="expectedRevenue" type="number" step="0.01" value={expected} onChange={e => { setExpected(e.target.value); if (consumption && groups) { const exp = parseFloat(e.target.value); if (!isNaN(exp) && exp > 0) { const pr = computePrices(consumption, groups, exp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); } } }} placeholder="例如 100000" />
         </div>
         <div className={styles.field}>
           <label htmlFor="companySelect">数据范围</label>
@@ -133,6 +199,32 @@ export default function IndexPage() {
         </div>
         <button onClick={handleCalculate}>计算</button>
         <div className={styles.error}>{error}</div>
+      </div>
+
+      <div className={styles.controls}>
+        <div className={styles.field}>
+          <label>选择小时列（点击表头，可Shift连选）</label>
+          <div className={styles.fileName}>{adjustSelected.length ? `已选：${adjustSelected.map(i => `${i + 1}点`).join('、')}` : '未选择'}</div>
+        </div>
+        <button disabled={!adjustSelected.length} onClick={addSelectionAsGroup}>添加为组</button>
+        <button onClick={clearAllGroups}>清除全部组</button>
+      </div>
+
+      <div className={styles.controls}>
+        <div className={styles.field}>
+          <label>分组与倍数</label>
+          <div className={styles.fileName}>{adjustGroups.length ? '' : '暂无组'}</div>
+        </div>
+        {adjustGroups.map((g, idx) => (
+          <div key={g.id} className={styles.field}>
+            <label>{`组${idx + 1}：${g.cols.map(i => `${i + 1}点`).join('、')}`}</label>
+            <input type="number" step="0.01" value={g.factor} onChange={e => {
+              const v = e.target.value;
+              setAdjustGroups(adjustGroups.map(x => x.id === g.id ? { ...x, factor: v } : x));
+            }} placeholder="倍数，例如 1.5" />
+            <button onClick={() => removeGroup(g.id)}>删除该组</button>
+          </div>
+        ))}
       </div>
 
       <section className={styles.results}>
