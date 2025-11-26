@@ -55,9 +55,9 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method Not Allowed' }); return; }
 
-  const isVercel = !!process.env.VERCEL || !!process.env.NOW_REGION;
-  const uploadDir = isVercel ? os.tmpdir() : path.join(process.cwd(), 'uploads');
-  if (!isVercel) ensureDir(uploadDir);
+  const isServerless = !!process.env.VERCEL || !!process.env.NOW_REGION || !!process.env.NETLIFY;
+  const uploadDir = isServerless ? os.tmpdir() : path.join(process.cwd(), 'uploads');
+  if (!isServerless) ensureDir(uploadDir);
   const form = formidable({ uploadDir, keepExtensions: true });
 
   const result = await new Promise((resolve, reject) => {

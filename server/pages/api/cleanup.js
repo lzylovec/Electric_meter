@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') { res.status(200).end(); return }
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method Not Allowed' }); return }
   try {
-    const uploadDir = path.join(process.cwd(), 'uploads');
+    const isServerless = !!process.env.VERCEL || !!process.env.NOW_REGION || !!process.env.NETLIFY;
+    const uploadDir = isServerless ? os.tmpdir() : path.join(process.cwd(), 'uploads');
     let cleared = 0;
     if (fs.existsSync(uploadDir)) {
       const items = fs.readdirSync(uploadDir);
