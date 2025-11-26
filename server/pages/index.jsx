@@ -52,6 +52,79 @@ export default function IndexPage() {
     return { sums: json.sums, companies: json.companies || [] };
   }
 
+  async function parseOnClient(f) {
+    try {
+      const ext = (f && f.name ? f.name.toLowerCase() : '');
+      if (ext.endsWith('.xlsx') || ext.endsWith('.xls')) {
+        const buf = await f.arrayBuffer();
+        const XLSX = await import('xlsx');
+        const wb = XLSX.read(buf, { type: 'array' });
+        const wsname = wb.SheetNames[0];
+        const sheet = wb.Sheets[wsname];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+        const clean = rows.filter(r => Array.isArray(r) && r.some(v => v !== undefined && v !== null && String(v).trim() !== ''));
+        if (clean.length === 0) return null;
+        let maxCols = 0; for (const r of clean) { if (r.length > maxCols) maxCols = r.length }
+        if (maxCols < 24) return null;
+        const startIdx = maxCols - 24;
+        const companies = [];
+        for (let i = 1; i < clean.length; i++) {
+          const r = clean[i];
+          const values = new Array(24).fill(0);
+          let hasNum = false;
+          for (let j = 0; j < 24; j++) {
+            const num = parseFloat(r[startIdx + j]);
+            if (!isNaN(num)) { values[j] = num; hasNum = true }
+          }
+          if (hasNum) {
+            const nameRaw = r[0];
+            const nameStr = String(nameRaw === undefined || nameRaw === null ? '' : nameRaw);
+            const name = nameStr.replace(/^\ufeff/, '').trim() || `第${i}行`;
+            companies.push({ name, values })
+          }
+        }
+        const sums = new Array(24).fill(0);
+        for (const c of companies) { for (let j = 0; j < 24; j++) sums[j] += c.values[j] }
+        return { sums, companies };
+      } else {
+        const text = await f.text();
+        const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
+        if (lines.length === 0) return null;
+        const rows = [];
+        let maxCols = 0;
+        for (const line of lines) {
+          const cols = line.split(/,|\t|;/).filter(x => x !== '');
+          rows.push(cols); if (cols.length > maxCols) maxCols = cols.length;
+        }
+        const clean = rows.filter(r => Array.isArray(r) && r.some(v => v !== undefined && v !== null && String(v).trim() !== ''));
+        if (clean.length === 0) return null;
+        if (maxCols < 24) return null;
+        const startIdx = maxCols - 24;
+        const companies = [];
+        for (let i = 1; i < clean.length; i++) {
+          const r = clean[i];
+          const values = new Array(24).fill(0);
+          let hasNum = false;
+          for (let j = 0; j < 24; j++) {
+            const num = parseFloat(r[startIdx + j]);
+            if (!isNaN(num)) { values[j] = num; hasNum = true }
+          }
+          if (hasNum) {
+            const nameRaw = r[0];
+            const nameStr = String(nameRaw === undefined || nameRaw === null ? '' : nameRaw);
+            const name = nameStr.replace(/^\ufeff/, '').trim() || `第${i}行`;
+            companies.push({ name, values })
+          }
+        }
+        const sums = new Array(24).fill(0);
+        for (const c of companies) { for (let j = 0; j < 24; j++) sums[j] += c.values[j] }
+        return { sums, companies };
+      }
+    } catch {
+      return null;
+    }
+  }
+
   async function renderChart(cons, pph) {
     const { Chart } = await import('chart.js/auto');
     const ctx = chartRef.current; if (!ctx) return;
@@ -143,6 +216,7 @@ export default function IndexPage() {
     const exp = parseFloat(expected); if (isNaN(exp) || exp <= 0) { setError('请输入有效的期望总收入'); return }
     if (!file) { setError('请先选择或拖拽文件'); return }
     let data = await parseViaBackend(file);
+    if (!data) data = await parseOnClient(file);
     if (!data) { setError('后端解析失败，请检查文件格式'); return }
     setParsed(data); setCompanies(data.companies || []); setSelected('__all__'); setScope('汇总(全部)');
     const cons = data.sums; const grp = classify(cons); const pr = computePrices(cons, grp, exp);

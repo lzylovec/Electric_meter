@@ -56,9 +56,9 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method Not Allowed' }); return; }
 
   const isServerless = !!process.env.VERCEL || !!process.env.NOW_REGION || !!process.env.NETLIFY;
-  const uploadDir = isServerless ? os.tmpdir() : path.join(process.cwd(), 'uploads');
-  if (!isServerless) ensureDir(uploadDir);
-  const form = formidable({ uploadDir, keepExtensions: true });
+  const uploadDir = os.tmpdir();
+  ensureDir(uploadDir);
+  const form = formidable({ uploadDir, keepExtensions: true, multiples: false, maxFileSize: 50 * 1024 * 1024 });
 
   const result = await new Promise((resolve, reject) => {
     form.parse(req, async (err, fields, files) => {
@@ -68,10 +68,11 @@ export default async function handler(req, res) {
         if (!file) { resolve({ status: 400, body: { error: 'No file' } }); return; }
         const filepath = Array.isArray(file) ? file[0].filepath : file.filepath;
         const originalName = Array.isArray(file) ? file[0].originalFilename : file.originalFilename;
-        const ext = (originalName || '').toLowerCase();
+        const extname = (originalName || filepath) ? path.extname(originalName || filepath).toLowerCase() : '';
         let data = null;
-        if (ext.endsWith('.xlsx') || ext.endsWith('.xls')) {
-          const wb = XLSX.readFile(filepath);
+        if (extname === '.xlsx' || extname === '.xls') {
+          const buf = fs.readFileSync(filepath);
+          const wb = XLSX.read(buf, { type: 'buffer' });
           const wsname = wb.SheetNames[0];
           const sheet = wb.Sheets[wsname];
           const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
