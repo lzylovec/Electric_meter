@@ -69,20 +69,27 @@ export default async function handler(req, res) {
         const filepath = Array.isArray(file) ? file[0].filepath : file.filepath;
         const originalName = Array.isArray(file) ? file[0].originalFilename : file.originalFilename;
         const extname = (originalName || filepath) ? path.extname(originalName || filepath).toLowerCase() : '';
-        let data = null;
+        let body = null;
         if (extname === '.xlsx' || extname === '.xls') {
           const buf = fs.readFileSync(filepath);
           const wb = XLSX.read(buf, { type: 'buffer' });
-          const wsname = wb.SheetNames[0];
-          const sheet = wb.Sheets[wsname];
-          const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
-          data = buildData(rows);
+          const months = [];
+          for (const wsname of wb.SheetNames) {
+            const sheet = wb.Sheets[wsname];
+            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+            const d = buildData(rows);
+            if (d) months.push({ name: wsname, ...d });
+          }
+          if (!months.length) { resolve({ status: 400, body: { error: 'Parse failed' } }); return; }
+          body = { filename: originalName, months, sums: months[0].sums, companies: months[0].companies };
         } else {
           const text = fs.readFileSync(filepath, 'utf8');
-          data = parseCsvText(text);
+          const d = parseCsvText(text);
+          if (!d) { resolve({ status: 400, body: { error: 'Parse failed' } }); return; }
+          const months = [{ name: 'CSV', ...d }];
+          body = { filename: originalName, months, sums: months[0].sums, companies: months[0].companies };
         }
-        if (!data) { resolve({ status: 400, body: { error: 'Parse failed' } }); return; }
-        resolve({ status: 200, body: { filename: originalName, ...data } });
+        resolve({ status: 200, body });
       } catch (e) {
         reject(e);
       }
