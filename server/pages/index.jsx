@@ -6,7 +6,7 @@ function fmt(n) { if (!isFinite(n)) return '--'; return Number(n).toFixed(4) }
 function fmtMoney(n) { if (!isFinite(n)) return '--'; return Number(n).toFixed(2) }
 function hours() { return Array.from({ length: 24 }, (_, i) => `${i + 1}点`) }
 
-function classify(cons, count = 8) {
+function classify(cons, count = 3) {
   const idx = cons.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).map(x => x.i);
   const high = new Set(idx.slice(0, count));
   const low = new Set(idx.slice(24 - count));
@@ -43,8 +43,8 @@ export default function IndexPage() {
   const chartRef = useRef(null); const chartInstance = useRef(null);
   const [adjustSelected, setAdjustSelected] = useState([]);
   const [adjustGroups, setAdjustGroups] = useState([]);
-  const [peakValleyCount, setPeakValleyCount] = useState(8);
-  const [calendarConfigs, setCalendarConfigs] = useState(() => Array(12).fill(8));
+  const [peakValleyCount, setPeakValleyCount] = useState(3);
+  const [calendarConfigs, setCalendarConfigs] = useState(() => Array(12).fill(3));
   const [currentCalendarMonth, setCurrentCalendarMonth] = useState(0); // 0 for Jan, 11 for Dec
   const lastSelIdxRef = useRef(null);
   const groupCounterRef = useRef(1);
@@ -236,7 +236,7 @@ export default function IndexPage() {
     setScope(`汇总(${data.months[0].name})`);
 
     // Use the count for the currently selected calendar month (default Jan/0)
-    const initialCount = calendarConfigs[currentCalendarMonth] || 8;
+    const initialCount = calendarConfigs[currentCalendarMonth] || 3;
     setPeakValleyCount(initialCount);
 
     const cons = data.months[0].sums; const grp = classify(cons, initialCount); const pr = computePrices(cons, grp, exp);
@@ -268,6 +268,33 @@ export default function IndexPage() {
       window.removeEventListener('beforeunload', send);
     }
   }, []);
+
+  // Load calendar configs from browser and save on change
+  useEffect(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('calendarConfigs') : null;
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr) && arr.length === 12) {
+          const fixed = arr.map(v => {
+            const n = parseInt(v, 10);
+            return (!isNaN(n) && n > 0 && n * 2 <= 24) ? n : 3;
+          });
+          setCalendarConfigs(fixed);
+          const c = fixed[currentCalendarMonth] || 3;
+          setPeakValleyCount(c);
+        }
+      }
+    } catch { }
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (Array.isArray(calendarConfigs) && calendarConfigs.length === 12) {
+        window.localStorage.setItem('calendarConfigs', JSON.stringify(calendarConfigs));
+      }
+    } catch { }
+  }, [calendarConfigs]);
 
   function recomputeWithGroups() {
     if (!basePrices || !consumption) return;
@@ -342,7 +369,7 @@ export default function IndexPage() {
               <select id="calendarMonth" value={currentCalendarMonth} onChange={e => {
                 const idx = parseInt(e.target.value, 10);
                 setCurrentCalendarMonth(idx);
-                const count = calendarConfigs[idx] || 8;
+                const count = calendarConfigs[idx] || 3;
                 setPeakValleyCount(count);
 
                 if (consumption && expected) {
@@ -365,13 +392,13 @@ export default function IndexPage() {
                 const val = e.target.value;
                 setPeakValleyCount(val);
                 const v = parseInt(val, 10);
-                if (!isNaN(v) && v > 0 && v * 2 <= 24 && consumption && expected) {
-                  const exp = parseFloat(expected);
-                  if (!isNaN(exp) && exp > 0) {
-                    const newConfigs = [...calendarConfigs];
-                    newConfigs[currentCalendarMonth] = v;
-                    setCalendarConfigs(newConfigs);
+                if (!isNaN(v) && v > 0 && v * 2 <= 24) {
+                  const newConfigs = [...calendarConfigs];
+                  newConfigs[currentCalendarMonth] = v;
+                  setCalendarConfigs(newConfigs);
 
+                  const exp = parseFloat(expected);
+                  if (consumption && !isNaN(exp) && exp > 0) {
                     const grp = classify(consumption, v);
                     const pr = computePrices(consumption, grp, exp);
                     setGroups(grp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); renderChart(consumption, pr.pricePerHour);

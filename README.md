@@ -8,6 +8,7 @@
 - 按“峰/平/谷”规则对 24 小时进行分档（算法见 `server/pages/index.jsx:9`）。
 - 输入期望总收入，计算满足目标的分时电价（计算逻辑见 `server/pages/index.jsx:18`）。
 - 12 个月配置：每月固定一套“峰谷数量”规则，支持来回切换（状态定义见 `server/pages/index.jsx:47-48`）。
+ - 12 个月配置：每月固定一套“峰谷数量”规则，支持来回切换，并在浏览器本地持久化保存（状态与持久化见 `server/pages/index.jsx:46-48, 270-292, 300-308`）。
 - 交互分组：选择小时列，按组设置“调整电价”与“倍数”，最终电价为二者相乘的结果（应用逻辑见 `server/pages/index.jsx:272-292`）。
 - 导出结果：生成带有时间、分档、用电量、分时电价、小时收入与合计的 Excel（导出逻辑见 `server/pages/index.jsx:204-222`）。
 - 图表展示：用电量柱状与电价折线复合图（`server/pages/index.jsx:138-147`）。
@@ -53,7 +54,7 @@
 
 ## 月份配置
 
-- 每月固定一套“峰谷数量”规则，默认值为 8（`server/pages/index.jsx:47-48`）。
+ - 每月固定一套“峰谷数量”规则，默认值为 3（`server/pages/index.jsx:46-48`），并通过浏览器 `localStorage` 持久化保存与读取（`server/pages/index.jsx:300-308`）。
 - 切换月份时会根据该月配置重新分档和计算（`server/pages/index.jsx:337-351`）。
 
 ## 分组调整
