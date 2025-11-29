@@ -1,11 +1,18 @@
 import { createClient } from '@supabase/supabase-js'
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const rawUrl = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_SUPABASE_URL : undefined
+const rawKey = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY : undefined
+const clean = v => {
+  if (typeof v !== 'string') return ''
+  const t = v.trim()
+  return t.replace(/^['"`]/, '').replace(/['"`]$/, '')
+}
+const url = clean(rawUrl)
+const key = clean(rawKey)
 
 let client = null
-if (typeof url === 'string' && url && typeof key === 'string' && key) {
-  client = createClient(url, key)
-}
+try {
+  if (url && key) client = createClient(url, key)
+} catch {}
 
 export const supabase = client
