@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import styles from './index.module.css';
+import { supabase } from '../lib/supabase'
 
 
 function fmt(n) { if (!isFinite(n)) return '--'; return Number(n).toFixed(4) }
@@ -25,6 +26,29 @@ function computePrices(cons, groups, expected) {
   return { pLow, pMid, pHigh, pricePerHour, revenue };
 }
 
+function mergeTemplate(cons, tplMonth) {
+  const cntRaw = tplMonth && tplMonth.count !== undefined ? parseInt(tplMonth.count, 10) : NaN
+  const cnt = (!isNaN(cntRaw) && cntRaw > 0) ? cntRaw : 3
+  const toIdx = arr => (Array.isArray(arr) ? arr : []).map(i => parseInt(i, 10)).filter(i => !isNaN(i) && i >= 0 && i < 24)
+  const peaks = new Set(toIdx(tplMonth && tplMonth.peaks))
+  const valleys = new Set(toIdx(tplMonth && tplMonth.valleys))
+  const used = new Set([...peaks, ...valleys])
+  const remain = Array.from({ length: 24 }, (_, i) => i).filter(i => !used.has(i))
+  if (Array.isArray(cons)) {
+    const desc = remain.map(i => ({ i, v: cons[i] })).sort((a, b) => b.v - a.v)
+    for (const x of desc) { if (peaks.size < cnt) peaks.add(x.i) }
+    const afterPeak = remain.filter(i => !peaks.has(i))
+    const asc = afterPeak.map(i => ({ i, v: cons[i] })).sort((a, b) => a.v - b.v)
+    for (const x of asc) { if (valleys.size < cnt) valleys.add(x.i) }
+  } else {
+    for (const i of remain) { if (peaks.size < cnt) peaks.add(i) }
+    for (const i of remain) { if (!peaks.has(i) && valleys.size < cnt) valleys.add(i) }
+  }
+  const labels = Array.from({ length: 24 }, (_, i) => peaks.has(i) ? '峰' : (valleys.has(i) ? '谷' : '平'))
+  const mid = new Set(labels.map((l, i) => l === '平' ? i : -1).filter(i => i >= 0))
+  return { labels, high: peaks, mid, low: valleys }
+}
+
 export default function IndexPage() {
   const [file, setFile] = useState(null);
   const [fileName, setFileName] = useState('');
@@ -48,6 +72,8 @@ export default function IndexPage() {
   const [currentCalendarMonth, setCurrentCalendarMonth] = useState(0); // 0 for Jan, 11 for Dec
   const lastSelIdxRef = useRef(null);
   const groupCounterRef = useRef(1);
+  const [templates, setTemplates] = useState([])
+  const [templateSelectedId, setTemplateSelectedId] = useState('')
 
   async function parseViaBackend(f) {
     const fd = new FormData(); fd.append('file', f);
@@ -239,7 +265,19 @@ export default function IndexPage() {
     const initialCount = calendarConfigs[currentCalendarMonth] || 3;
     setPeakValleyCount(initialCount);
 
-    const cons = data.months[0].sums; const grp = classify(cons, initialCount); const pr = computePrices(cons, grp, exp);
+    const cons = data.months[0].sums;
+    let grp = null
+    if (templateSelectedId) {
+      const tpl = templates.find(t => t.id === templateSelectedId)
+      const tm = tpl && tpl.months ? tpl.months[currentCalendarMonth] : null
+      const cntRaw = tm && tm.count !== undefined ? parseInt(tm.count, 10) : NaN
+      const cnt = (!isNaN(cntRaw) && cntRaw > 0) ? cntRaw : initialCount
+      setPeakValleyCount(cnt)
+      grp = tm ? mergeTemplate(cons, tm) : classify(cons, cnt)
+    } else {
+      grp = classify(cons, initialCount)
+    }
+    const pr = computePrices(cons, grp, exp);
     setConsumption(cons); setGroups(grp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); renderChart(cons, pr.pricePerHour);
   }
 
@@ -248,7 +286,18 @@ export default function IndexPage() {
     let cons = null; let scope = '';
     const m = months[monthIdx]; if (!m) return;
     if (sel === '__all__') { cons = m.sums; scope = `汇总(${m.name})` } else { const idx = parseInt(sel, 10); if (isNaN(idx) || !m.companies[idx]) return; cons = m.companies[idx].values; scope = `${m.name}-${m.companies[idx].name}` }
-    const grp = classify(cons, peakValleyCount); const pr = computePrices(cons, grp, exp);
+    let grp = null
+    if (templateSelectedId) {
+      const tpl = templates.find(t => t.id === templateSelectedId)
+      const tm = tpl && tpl.months ? tpl.months[currentCalendarMonth] : null
+      const cntRaw = tm && tm.count !== undefined ? parseInt(tm.count, 10) : NaN
+      const cnt = (!isNaN(cntRaw) && cntRaw > 0) ? cntRaw : peakValleyCount
+      setPeakValleyCount(cnt)
+      grp = tm ? mergeTemplate(cons, tm) : classify(cons, cnt)
+    } else {
+      grp = classify(cons, peakValleyCount)
+    }
+    const pr = computePrices(cons, grp, exp);
     setConsumption(cons); setGroups(grp); setBasePrices(pr); setPrices(pr); setScope(scope); setAdjustSelected([]); setAdjustGroups([]); renderChart(cons, pr.pricePerHour);
   }
 
@@ -295,6 +344,34 @@ export default function IndexPage() {
       }
     } catch { }
   }, [calendarConfigs]);
+
+  useEffect(() => {
+    async function loadTemplates() {
+      try {
+        if (!supabase) return
+        const { data } = await supabase.from('rule_templates').select('id,name,months').order('created_at', { ascending: false })
+        setTemplates(Array.isArray(data) ? data : [])
+      } catch { }
+    }
+    loadTemplates()
+  }, [])
+
+  function applyTemplateById(id) {
+    const tpl = templates.find(t => t.id === id)
+    if (!tpl) return
+    const m = tpl.months && tpl.months[currentCalendarMonth] ? tpl.months[currentCalendarMonth] : null
+    if (!m) return
+    const grp = mergeTemplate(consumption, m)
+    const cnt = parseInt(m.count, 10)
+    setPeakValleyCount(!isNaN(cnt) && cnt > 0 ? cnt : 3)
+    const exp = parseFloat(expected)
+    if (consumption && !isNaN(exp) && exp > 0) {
+      const pr = computePrices(consumption, grp, exp)
+      setGroups(grp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); renderChart(consumption, pr.pricePerHour)
+    } else {
+      setGroups(grp); setBasePrices(null); setPrices(null); setAdjustSelected([]); setAdjustGroups([])
+    }
+  }
 
   function recomputeWithGroups() {
     if (!basePrices || !consumption) return;
@@ -343,143 +420,131 @@ export default function IndexPage() {
   return (
     <div className={styles.container}>
       <h1 className={styles.title}>管理员上传用电量并计算分档电价</h1>
+
       <div className={styles.controls}>
-        {/* Card 1: File & Input */}
-        <div className={styles.groupCard}>
-          <div className={styles.groupHeader}>1. 导入数据</div>
-          <div className={styles.field}>
-            <label htmlFor="excelFile">Excel/CSV（24小时用电量，单位：MWh）</label>
-            <input id="excelFile" type="file" accept=".xlsx,.xls,.csv" onChange={e => { const f = e.target.files && e.target.files[0] ? e.target.files[0] : null; setFile(f); setFileName(f ? f.name : '') }} />
-            <div className={styles.fileRow}>
-              <button className={styles.secondaryButton} onClick={() => document.getElementById('excelFile').click()}>选择文件</button>
-              <span className={styles.fileName}>{fileName ? fileName : '未选择文件'}</span>
+        {/* Column 1: Data Source */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          <div className={styles.groupCard}>
+            <div className={styles.groupHeader}>1. 数据源</div>
+            <div className={styles.field}>
+              <label htmlFor="excelFile">导入数据 (Excel/CSV)</label>
+              <div className={styles.fileRow}>
+                <button className={styles.secondaryButton} onClick={() => document.getElementById('excelFile').click()}>选择文件</button>
+                <span className={styles.fileName}>{fileName ? fileName : '未选择文件'}</span>
+              </div>
+              <input id="excelFile" type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files && e.target.files[0] ? e.target.files[0] : null; setFile(f); setFileName(f ? f.name : '') }} />
+
+              <div className={`${styles.dropzone}`} style={{ marginTop: '12px', padding: '20px' }} onClick={() => document.getElementById('excelFile').click()} onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('isDrag') }} onDragLeave={e => { e.currentTarget.classList.remove('isDrag') }} onDrop={e => { e.preventDefault(); e.currentTarget.classList.remove('isDrag'); const f = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files[0] : null; setFile(f); setFileName(f ? f.name : '') }}>
+                {fileName || '拖拽文件到此或点击选择'}
+              </div>
             </div>
-            <div className={`${styles.dropzone}`} onClick={() => document.getElementById('excelFile').click()} onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('isDrag') }} onDragLeave={e => { e.currentTarget.classList.remove('isDrag') }} onDrop={e => { e.preventDefault(); e.currentTarget.classList.remove('isDrag'); const f = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files[0] : null; setFile(f); setFileName(f ? f.name : '') }}>
-              {fileName || '拖拽文件到此或点击选择'}
+
+            <div className={styles.field} style={{ marginTop: '16px' }}>
+              <label htmlFor="dataScope">数据范围</label>
+              <select id="dataScope" value={selected} onChange={e => { const val = e.target.value; setSelected(val); recomputeForSelection(val) }}>
+                <option value="__all__">汇总</option>
+                {companies.map((c, i) => (<option key={i} value={String(i)}>{c.name}</option>))}
+              </select>
             </div>
           </div>
         </div>
 
-        {/* Card 2: Configuration */}
-        <div className={styles.groupCard}>
-          <div className={styles.groupHeader}>2. 参数设置</div>
-          <div className={styles.controlRow}>
-            <div className={styles.field}>
-              <label htmlFor="calendarMonth">配置月份</label>
-              <select id="calendarMonth" value={currentCalendarMonth} onChange={e => {
-                const idx = parseInt(e.target.value, 10);
-                setCurrentCalendarMonth(idx);
-                const count = calendarConfigs[idx] || 3;
-                setPeakValleyCount(count);
+        {/* Column 2: Calculation Parameters */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          <div className={styles.groupCard}>
+            <div className={styles.groupHeader}>2. 计算参数</div>
 
-                if (consumption && expected) {
-                  const exp = parseFloat(expected);
-                  if (!isNaN(exp) && exp > 0) {
-                    const grp = classify(consumption, count);
-                    const pr = computePrices(consumption, grp, exp);
-                    setGroups(grp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); renderChart(consumption, pr.pricePerHour);
-                  }
-                }
-              }}>
-                {Array.from({ length: 12 }, (_, i) => (
-                  <option key={i} value={i}>{i + 1}月</option>
-                ))}
-              </select>
-            </div>
             <div className={styles.field}>
-              <label htmlFor="peakValleyCount">峰谷数量（个）</label>
-              <input id="peakValleyCount" type="number" min="1" max="11" value={peakValleyCount} onChange={e => {
-                const val = e.target.value;
-                setPeakValleyCount(val);
-                const v = parseInt(val, 10);
-                if (!isNaN(v) && v > 0 && v * 2 <= 24) {
-                  const newConfigs = [...calendarConfigs];
-                  newConfigs[currentCalendarMonth] = v;
-                  setCalendarConfigs(newConfigs);
+              <label htmlFor="ruleTemplate">规则模板</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <select id="ruleTemplate" style={{ flex: 1 }} value={templateSelectedId} onChange={e => setTemplateSelectedId(e.target.value)}>
+                  <option value="">未选择 (默认3档)</option>
+                  {templates.map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                </select>
+                <a className={styles.secondaryButton} href="/rules" target="_blank" rel="noopener noreferrer">管理</a>
+              </div>
+              {!supabase && (
+                <div className={styles.error} style={{ fontSize: '12px', padding: '8px' }}>未配置 Supabase，模板不可用。</div>
+              )}
+            </div>
 
-                  const exp = parseFloat(expected);
-                  if (consumption && !isNaN(exp) && exp > 0) {
-                    const grp = classify(consumption, v);
-                    const pr = computePrices(consumption, grp, exp);
-                    setGroups(grp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); renderChart(consumption, pr.pricePerHour);
-                  }
-                }
-              }} />
-            </div>
-          </div>
-          <div className={styles.controlRow} style={{ marginTop: 16 }}>
-            <div className={styles.field}>
+            <div className={styles.field} style={{ marginTop: '16px' }}>
               <label htmlFor="expectedRevenue">期望总收入（元）</label>
               <input id="expectedRevenue" type="number" step="0.01" value={expected} onChange={e => { setExpected(e.target.value); if (consumption && groups) { const exp = parseFloat(e.target.value); if (!isNaN(exp) && exp > 0) { const pr = computePrices(consumption, groups, exp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); } } }} placeholder="例如 100000" />
             </div>
+
+            <div style={{ marginTop: '24px' }}>
+              <button className={styles.actionButton} onClick={handleCalculate}>开始计算</button>
+              {error && <div className={styles.error}>{error}</div>}
+            </div>
           </div>
         </div>
-
-        <button className={styles.actionButton} onClick={handleCalculate}>计算结果</button>
-        <div className={styles.error}>{error}</div>
       </div>
 
-      <div className={styles.controls}>
-        {/* Card 3: Grouping & Adjustment */}
-        <div className={styles.groupCard}>
-          <div className={styles.groupHeader}>3. 分组与调整</div>
-
-          <div className={styles.controlRow}>
-            <div className={styles.field} style={{ flex: 2 }}>
-              <label>选择小时列（点击表头，可Shift连选）</label>
-              <div className={styles.fileName} style={{ marginTop: 8, padding: '8px', background: '#fff', border: '1px solid #eee', borderRadius: '4px', minHeight: '38px', display: 'flex', alignItems: 'center' }}>
-                {adjustSelected.length ? `已选：${adjustSelected.map(i => `${i + 1}点`).join('、')}` : <span style={{ color: '#9ca3af' }}>请在下方表格点击表头选择时间段</span>}
-              </div>
-            </div>
-            <div className={styles.field} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-end', justifyContent: 'flex-start', paddingBottom: 2 }}>
-              <button className={styles.secondaryButton} disabled={!adjustSelected.length} onClick={addSelectionAsGroup}>添加为组</button>
-              <button className={styles.secondaryButton} onClick={clearAllGroups}>清除全部组</button>
-            </div>
+      {/* Results Section */}
+      {prices && (
+        <section className={styles.results}>
+          <div className={styles.summary}>
+            <div className={styles.card}><div className={styles.cardTitle}>当前范围</div><div className={styles.cardValue}>{scope}</div></div>
+            <div className={styles.card}><div className={styles.cardTitle}>谷电价</div><div className={styles.cardValue}>{fmt(prices.pLow)}</div></div>
+            <div className={styles.card}><div className={styles.cardTitle}>平电价</div><div className={styles.cardValue}>{fmt(prices.pMid)}</div></div>
+            <div className={styles.card}><div className={styles.cardTitle}>峰电价</div><div className={styles.cardValue}>{fmt(prices.pHigh)}</div></div>
+            <div className={styles.card}><div className={styles.cardTitle}>总收入（元）</div><div className={styles.cardValue}>{fmtMoney(prices.revenue)}</div></div>
           </div>
 
-          {adjustGroups.length > 0 && (
-            <div style={{ marginTop: 24, borderTop: '1px solid #e2e8f0', paddingTop: 16 }}>
-              <div className={styles.groupHeader} style={{ fontSize: '14px', color: '#334155', marginBottom: 12 }}>已添加的分组 ({adjustGroups.length})</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <h2 style={{ marginTop: '32px' }}>分时电价详情</h2>
+
+          {/* Grouping & Adjustment moved here */}
+          <div className={styles.adjustSection}>
+            <div className={styles.groupHeader} style={{ borderBottom: 'none', marginBottom: '12px' }}>微调工具：分组与调整</div>
+            <div className={styles.controlRow}>
+              <div className={styles.field} style={{ flex: 2 }}>
+                <label>1. 在下方表格点击表头选择时间段 (支持Shift连选)</label>
+                <div className={styles.fileName} style={{ marginTop: 8, padding: '8px', background: '#fff', border: '1px solid #cbd5e1', borderRadius: '6px', minHeight: '38px', display: 'flex', alignItems: 'center' }}>
+                  {adjustSelected.length ? `已选：${adjustSelected.map(i => `${i + 1}点`).join('、')}` : <span style={{ color: '#9ca3af' }}>未选择时间段</span>}
+                </div>
+              </div>
+              <div className={styles.field} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-end', justifyContent: 'flex-start', paddingBottom: 2 }}>
+                <button className={styles.secondaryButton} disabled={!adjustSelected.length} onClick={addSelectionAsGroup}>2. 添加为调整组</button>
+                <button className={styles.secondaryButton} onClick={clearAllGroups}>清除全部</button>
+              </div>
+            </div>
+
+            {adjustGroups.length > 0 && (
+              <div className={styles.groupList}>
                 {adjustGroups.map((g, idx) => (
-                  <div key={g.id} style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', background: '#fff', padding: '12px 16px', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                  <div key={g.id} className={styles.groupItem}>
                     <div style={{ minWidth: 60, fontWeight: 600, color: '#475569' }}>组 {idx + 1}</div>
                     <div style={{ flex: 1, minWidth: 200, fontSize: 14, color: '#475569' }}>
                       <span style={{ color: '#64748b', marginRight: 8 }}>包含:</span>
                       {g.cols.map(i => `${i + 1}点`).join('、')}
                     </div>
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <input type="number" step="0.01" value={g.setPrice} onChange={e => { const v = e.target.value; setAdjustGroups(adjustGroups.map(x => x.id === g.id ? { ...x, setPrice: v } : x)) }} placeholder="调整电价" style={{ padding: '8px', border: '1px solid #d1d5db', borderRadius: 6, width: 100 }} />
-                      <span style={{ color: '#9ca3af' }}>×</span>
-                      <input type="number" step="0.01" value={g.factor} onChange={e => { const v = e.target.value; setAdjustGroups(adjustGroups.map(x => x.id === g.id ? { ...x, factor: v } : x)) }} placeholder="倍数" style={{ padding: '8px', border: '1px solid #d1d5db', borderRadius: 6, width: 80 }} />
-                      <button className={styles.secondaryButton} onClick={() => removeGroup(g.id)} style={{ padding: '8px 12px', color: '#ef4444', borderColor: '#fee2e2', background: '#fef2f2' }}>删除</button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ fontSize: 12, color: '#64748b' }}>固定价:</span>
+                        <input type="number" step="0.01" value={g.setPrice} onChange={e => { const v = e.target.value; setAdjustGroups(adjustGroups.map(x => x.id === g.id ? { ...x, setPrice: v } : x)) }} placeholder="未设置" style={{ padding: '6px', border: '1px solid #d1d5db', borderRadius: 4, width: 80 }} />
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ fontSize: 12, color: '#64748b' }}>倍率:</span>
+                        <input type="number" step="0.01" value={g.factor} onChange={e => { const v = e.target.value; setAdjustGroups(adjustGroups.map(x => x.id === g.id ? { ...x, factor: v } : x)) }} placeholder="1.0" style={{ padding: '6px', border: '1px solid #d1d5db', borderRadius: 4, width: 60 }} />
+                      </div>
+                      <button className={styles.secondaryButton} onClick={() => removeGroup(g.id)} style={{ padding: '6px 10px', color: '#ef4444', borderColor: '#fee2e2', background: '#fef2f2', fontSize: 12 }}>删除</button>
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-        </div>
-      </div>
+            )}
+          </div>
 
-      <section className={styles.results}>
-        <div className={styles.summary}>
-          <div className={styles.card}><div className={styles.cardTitle}>数据范围</div><div className={styles.cardValue}>{scope}</div></div>
-          <div className={styles.card}><div className={styles.cardTitle}>谷电价</div><div className={styles.cardValue}>{prices ? fmt(prices.pLow) : '--'}</div></div>
-          <div className={styles.card}><div className={styles.cardTitle}>平电价</div><div className={styles.cardValue}>{prices ? fmt(prices.pMid) : '--'}</div></div>
-          <div className={styles.card}><div className={styles.cardTitle}>峰电价</div><div className={styles.cardValue}>{prices ? fmt(prices.pHigh) : '--'}</div></div>
-          <div className={styles.card}><div className={styles.cardTitle}>总收入（元）</div><div className={styles.cardValue}>{prices ? fmtMoney(prices.revenue) : '--'}</div></div>
-        </div>
+          {renderTable()}
+          <div className={styles.controls} style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button className={styles.actionButton} style={{ width: 'auto' }} onClick={handleExport}>导出表格结果</button>
+          </div>
 
-        <h2>表格结果</h2>
-        {renderTable()}
-        <div className={styles.controls}>
-          <button className={styles.actionButton} disabled={!prices} onClick={handleExport}>导出表格结果</button>
-        </div>
-
-        <h2>图表展示</h2>
-        <div className={styles.chartWrap}><canvas ref={chartRef} height="140" /></div>
-      </section>
+          <h2 style={{ marginTop: '48px' }}>图表展示</h2>
+          <div className={styles.chartWrap}><canvas ref={chartRef} height="100" /></div>
+        </section>
+      )}
     </div >
   )
 }
