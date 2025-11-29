@@ -13,6 +13,24 @@
 - 导出结果：生成带有时间、分档、用电量、分时电价、小时收入与合计的 Excel（导出逻辑见 `server/pages/index.jsx:204-222`）。
 - 图表展示：用电量柱状与电价折线复合图（`server/pages/index.jsx:138-147`）。
 
+## 规则管理与模板
+
+- 模板管理页面：`/rules`（`server/pages/rules.jsx`）
+  - 保存模板：`server/pages/rules.jsx:46-62`
+  - 查看列表与刷新：`server/pages/rules.jsx:117-132, 170-186`
+  - 载入到编辑：`server/pages/rules.jsx:134-150`
+  - 更新模板：`server/pages/rules.jsx:152-165`
+  - 删除模板：`server/pages/rules.jsx:167-186`
+- 模板优先原则与期望值保持：
+  - 合并函数（模板优先覆盖，其余小时按用电量补齐到模板设定的峰谷数量）：`server/pages/index.jsx:29-48`
+  - 收入保持（按权重计算系数确保总收入等于期望值）：`server/pages/index.jsx:11-21`
+  - 应用时机：首次计算 `server/pages/index.jsx:268-281`、切换公司/汇总 `server/pages/index.jsx:284-302`、切换月份 `server/pages/index.jsx:459-484`、调整峰谷数量 `server/pages/index.jsx:493-515`、手动应用模板 `server/pages/index.jsx:359-374`
+
+## 公司数据查看
+
+- 在首页“数据范围”卡片选择“汇总”或具体公司：`server/pages/index.jsx:440-451`
+- 切换后重算分档与电价：`server/pages/index.jsx:284-302`
+
 ## 使用步骤
 
 1. 安装并启动
@@ -80,11 +98,36 @@
   - `vercel.json`（位于项目根目录）
   - `netlify.toml`（位于项目根目录）
 
+### Netlify 部署
+
+- 构建配置：`netlify.toml:1-10`
+  - 基目录 `base = "server"`
+  - 构建命令 `command = "npm run build"`
+  - 发布目录 `publish = ".next"`
+  - 插件 `@netlify/plugin-nextjs`
+- 环境变量（Site settings → Build & deploy → Environment variables）：
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- 新增或修改环境变量后，务必执行一次 “Clear cache and deploy site” 以确保前端包包含最新 `NEXT_PUBLIC_*` 变量。
+
+### Supabase 配置与脚本
+
+- 客户端初始化（包含首尾引号/反引号与空格清理）：`server/lib/supabase.js:1-20`
+- 在线诊断：`/api/ping`（`server/pages/api/ping.js:1-14`），返回 `{ ok: true, count: ... }` 表示连接与表访问正常。
+- SQL 脚本集中在：
+  - `server/supabase/001_create_rule_templates.sql`（建表与启用 RLS）
+  - `server/supabase/002_rls_policies.sql`（演示用匿名策略：select/insert/update/delete）
+- 生产建议：将 RLS 收紧为“仅认证用户可写/删”，并按操作者 UID 隔离行。
+
 ## 常见问题
 
 - 不能计算分档电价：检查是否已导入有效文件，且“期望总收入”填写为正数。
 - 手动输入“峰谷数量”无效：确保输入为 1–11 的整数并且 2×数量 ≤ 24。
 - 文件无法解析：确认最后 24 列为数值（小时用电量），首列为企业名称或标识。
+- Netlify 上提示“未配置 Supabase”：
+  - 检查环境变量键名严格为 `NEXT_PUBLIC_SUPABASE_URL` 与 `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - 检查值不包含引号/反引号与前后空格；必要时重新部署并清缓存
+  - 用 `https://<your-site>.netlify.app/api/ping` 验证连接
 
 ---
 
