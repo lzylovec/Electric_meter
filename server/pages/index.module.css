@@ -310,16 +310,30 @@
   color: #475569;
 }
 
-.levelLow {
-  background: #d1fae5
+/* New 5-level color scheme */
+.levelSpike {
+  background: #fca5a5;
+  color: #7f1d1d;
 }
 
-.levelMid {
-  background: #fde68a
+.levelPeak {
+  background: #fed7aa;
+  color: #7c2d12;
 }
 
-.levelHigh {
-  background: #fecaca
+.levelFlat {
+  background: #fef08a;
+  color: #854d0e;
+}
+
+.levelValley {
+  background: #bbf7d0;
+  color: #14532d;
+}
+
+.levelDeep {
+  background: #bfdbfe;
+  color: #1e3a8a;
 }
 
 .selectedCol {

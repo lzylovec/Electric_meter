@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase'
 function fmt(n) { if (!isFinite(n)) return '--'; return Number(n).toFixed(4) }
 function fmtMoney(n) { if (!isFinite(n)) return '--'; return Number(n).toFixed(2) }
 function hours() { return Array.from({ length: 24 }, (_, i) => `${i + 1}点`) }
+const defaultFactors = { flat: 1, spike: 2, peak: 1.7, valley: 0.3, deep: 0.1 }
 
 function classify(cons, count = 3) {
   const idx = cons.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).map(x => x.i);
@@ -16,37 +17,59 @@ function classify(cons, count = 3) {
   return { labels, high, mid, low };
 }
 
-function computePrices(cons, groups, expected) {
-  const wLow = 1, wMid = 1.5, wHigh = 2; let denom = 0;
-  for (let i = 0; i < cons.length; i++) { const w = groups.high.has(i) ? wHigh : (groups.mid.has(i) ? wMid : wLow); denom += cons[i] * w }
-  if (denom <= 0) return null; const k = expected / denom;
-  const pLow = k * wLow, pMid = k * wMid, pHigh = k * wHigh;
-  const pricePerHour = cons.map((_, i) => groups.high.has(i) ? pHigh : (groups.mid.has(i) ? pMid : pLow));
-  let revenue = 0; for (let i = 0; i < cons.length; i++)revenue += cons[i] * pricePerHour[i];
-  return { pLow, pMid, pHigh, pricePerHour, revenue };
+function computePrices(cons, groups, expected, f = defaultFactors) {
+  const fs = cons.map((_, i) => {
+    const l = groups.labels && groups.labels[i] ? groups.labels[i] : '平'
+    if (l === '尖峰') return Number(f.spike) || 2
+    if (l === '峰') return Number(f.peak) || 1.7
+    if (l === '谷') return Number(f.valley) || 0.3
+    if (l === '深谷') return Number(f.deep) || 0.1
+    return Number(f.flat) || 1
+  })
+  let denom = 0; for (let i = 0; i < cons.length; i++) denom += cons[i] * fs[i]
+  if (denom <= 0) return null; const pFlat = expected / denom
+  const pSpike = pFlat * ((Number(f.spike) || 2))
+  const pPeak = pFlat * ((Number(f.peak) || 1.7))
+  const pValley = pFlat * ((Number(f.valley) || 0.3))
+  const pDeep = pFlat * ((Number(f.deep) || 0.1))
+  const pricePerHour = cons.map((_, i) => pFlat * fs[i])
+  let revenue = 0; for (let i = 0; i < cons.length; i++) revenue += cons[i] * pricePerHour[i]
+  return { pDeep, pValley, pFlat, pPeak, pSpike, pricePerHour, revenue }
 }
 
 function mergeTemplate(cons, tplMonth) {
   const cntRaw = tplMonth && tplMonth.count !== undefined ? parseInt(tplMonth.count, 10) : NaN
   const cnt = (!isNaN(cntRaw) && cntRaw > 0) ? cntRaw : 3
   const toIdx = arr => (Array.isArray(arr) ? arr : []).map(i => parseInt(i, 10)).filter(i => !isNaN(i) && i >= 0 && i < 24)
+  const spikes = new Set(toIdx(tplMonth && tplMonth.spikes))
   const peaks = new Set(toIdx(tplMonth && tplMonth.peaks))
   const valleys = new Set(toIdx(tplMonth && tplMonth.valleys))
-  const used = new Set([...peaks, ...valleys])
+  const deeps = new Set(toIdx(tplMonth && tplMonth.deeps))
+  const used = new Set([...spikes, ...peaks, ...valleys, ...deeps])
   const remain = Array.from({ length: 24 }, (_, i) => i).filter(i => !used.has(i))
   if (Array.isArray(cons)) {
     const desc = remain.map(i => ({ i, v: cons[i] })).sort((a, b) => b.v - a.v)
-    for (const x of desc) { if (peaks.size < cnt) peaks.add(x.i) }
-    const afterPeak = remain.filter(i => !peaks.has(i))
+    for (const x of desc) { if (spikes.size < Math.max(1, Math.floor(cnt / 2))) spikes.add(x.i) }
+    const afterSpike = remain.filter(i => !spikes.has(i))
+    const desc2 = afterSpike.map(i => ({ i, v: cons[i] })).sort((a, b) => b.v - a.v)
+    for (const x of desc2) { if (peaks.size < cnt) peaks.add(x.i) }
+    const afterPeak = remain.filter(i => !spikes.has(i) && !peaks.has(i))
     const asc = afterPeak.map(i => ({ i, v: cons[i] })).sort((a, b) => a.v - b.v)
-    for (const x of asc) { if (valleys.size < cnt) valleys.add(x.i) }
+    for (const x of asc) { if (deeps.size < Math.max(1, Math.floor(cnt / 2))) deeps.add(x.i) }
+    const afterDeep = afterPeak.filter(i => !deeps.has(i))
+    const asc2 = afterDeep.map(i => ({ i, v: cons[i] })).sort((a, b) => a.v - b.v)
+    for (const x of asc2) { if (valleys.size < cnt) valleys.add(x.i) }
   } else {
-    for (const i of remain) { if (peaks.size < cnt) peaks.add(i) }
-    for (const i of remain) { if (!peaks.has(i) && valleys.size < cnt) valleys.add(i) }
+    for (const i of remain) { if (spikes.size < Math.max(1, Math.floor(cnt / 2))) spikes.add(i) }
+    for (const i of remain) { if (!spikes.has(i) && peaks.size < cnt) peaks.add(i) }
+    for (const i of remain) { if (!spikes.has(i) && !peaks.has(i) && deeps.size < Math.max(1, Math.floor(cnt / 2))) deeps.add(i) }
+    for (const i of remain) { if (!spikes.has(i) && !peaks.has(i) && !deeps.has(i) && valleys.size < cnt) valleys.add(i) }
   }
-  const labels = Array.from({ length: 24 }, (_, i) => peaks.has(i) ? '峰' : (valleys.has(i) ? '谷' : '平'))
+  const labels = Array.from({ length: 24 }, (_, i) => (spikes.has(i) ? '尖峰' : (peaks.has(i) ? '峰' : (valleys.has(i) ? '谷' : (deeps.has(i) ? '深谷' : '平')))))
   const mid = new Set(labels.map((l, i) => l === '平' ? i : -1).filter(i => i >= 0))
-  return { labels, high: peaks, mid, low: valleys }
+  const spike = new Set(labels.map((l, i) => l === '尖峰' ? i : -1).filter(i => i >= 0))
+  const deep = new Set(labels.map((l, i) => l === '深谷' ? i : -1).filter(i => i >= 0))
+  return { labels, high: peaks, mid, low: valleys, spike, deep }
 }
 
 export default function IndexPage() {
@@ -65,8 +88,6 @@ export default function IndexPage() {
   const [selected, setSelected] = useState('__all__');
   const [error, setError] = useState('');
   const chartRef = useRef(null); const chartInstance = useRef(null);
-  const [adjustSelected, setAdjustSelected] = useState([]);
-  const [adjustGroups, setAdjustGroups] = useState([]);
   const [peakValleyCount, setPeakValleyCount] = useState(3);
   const [calendarConfigs, setCalendarConfigs] = useState(() => Array(12).fill(3));
   const [currentCalendarMonth, setCurrentCalendarMonth] = useState(0); // 0 for Jan, 11 for Dec
@@ -74,6 +95,7 @@ export default function IndexPage() {
   const groupCounterRef = useRef(1);
   const [templates, setTemplates] = useState([])
   const [templateSelectedId, setTemplateSelectedId] = useState('')
+  const [factors, setFactors] = useState(defaultFactors)
 
   async function parseViaBackend(f) {
     const fd = new FormData(); fd.append('file', f);
@@ -184,35 +206,10 @@ export default function IndexPage() {
       <div className={styles.tableWrap}>
         <table>
           <thead>
-            <tr>{hdr1.map((c, i) => {
-              if (i === 0) return <th key={'h1' + i}>{c}</th>;
-              const idx = i - 1;
-              const isSel = adjustSelected.includes(idx);
-              const cls = isSel ? styles.selectedCol : '';
-              return (
-                <th
-                  key={'h1' + i}
-                  className={cls}
-                  onClick={e => {
-                    const shift = e.shiftKey;
-                    if (shift && lastSelIdxRef.current !== null && lastSelIdxRef.current !== undefined) {
-                      const a = Math.min(lastSelIdxRef.current, idx);
-                      const b = Math.max(lastSelIdxRef.current, idx);
-                      const set = new Set(adjustSelected);
-                      for (let k = a; k <= b; k++) set.add(k);
-                      setAdjustSelected(Array.from(set).sort((x, y) => x - y));
-                    } else {
-                      const set = new Set(adjustSelected);
-                      if (set.has(idx)) set.delete(idx); else set.add(idx);
-                      setAdjustSelected(Array.from(set).sort((x, y) => x - y));
-                      lastSelIdxRef.current = idx;
-                    }
-                  }}
-                >{c}</th>
-              )
-            })}</tr>
+            <tr>{hdr1.map((c, i) => (<th key={'h1' + i}>{c}</th>))}</tr>
             <tr>{hdr2.map((c, i) => {
-              const cls = i === 0 ? '' : (c === '谷' ? styles.levelLow : (c === '平' ? styles.levelMid : styles.levelHigh));
+              const clsMap = { '尖峰': styles.levelSpike, '峰': styles.levelPeak, '平': styles.levelFlat, '谷': styles.levelValley, '深谷': styles.levelDeep };
+              const cls = i === 0 ? '' : (clsMap[c] || styles.levelFlat);
               const Tag = i === 0 ? 'th' : 'td';
               return <Tag key={'h2' + i} className={cls}>{c}</Tag>
             })}</tr>
@@ -277,8 +274,8 @@ export default function IndexPage() {
     } else {
       grp = classify(cons, initialCount)
     }
-    const pr = computePrices(cons, grp, exp);
-    setConsumption(cons); setGroups(grp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); renderChart(cons, pr.pricePerHour);
+    const pr = computePrices(cons, grp, exp, factors);
+    setConsumption(cons); setGroups(grp); setBasePrices(pr); setPrices(pr); renderChart(cons, pr.pricePerHour);
   }
 
   function recomputeForSelection(sel) {
@@ -297,8 +294,8 @@ export default function IndexPage() {
     } else {
       grp = classify(cons, peakValleyCount)
     }
-    const pr = computePrices(cons, grp, exp);
-    setConsumption(cons); setGroups(grp); setBasePrices(pr); setPrices(pr); setScope(scope); setAdjustSelected([]); setAdjustGroups([]); renderChart(cons, pr.pricePerHour);
+    const pr = computePrices(cons, grp, exp, factors);
+    setConsumption(cons); setGroups(grp); setBasePrices(pr); setPrices(pr); setScope(scope); renderChart(cons, pr.pricePerHour);
   }
 
   useEffect(() => { if (consumption && prices) renderChart(consumption, prices.pricePerHour) }, [consumption, prices]);
@@ -349,7 +346,7 @@ export default function IndexPage() {
     async function loadTemplates() {
       try {
         if (!supabase) return
-        const { data } = await supabase.from('rule_templates').select('id,name,months').order('created_at', { ascending: false })
+        const { data } = await supabase.from('rule_templates').select('id,name,months,factors').order('created_at', { ascending: false })
         setTemplates(Array.isArray(data) ? data : [])
       } catch { }
     }
@@ -364,57 +361,40 @@ export default function IndexPage() {
     const grp = mergeTemplate(consumption, m)
     const cnt = parseInt(m.count, 10)
     setPeakValleyCount(!isNaN(cnt) && cnt > 0 ? cnt : 3)
+    const tf = tpl.factors || {}
+    setFactors({
+      flat: Number(tf.flat) > 0 ? Number(tf.flat) : 1,
+      spike: Number(tf.spike) > 0 ? Number(tf.spike) : 2,
+      peak: Number(tf.peak) > 0 ? Number(tf.peak) : 1.7,
+      valley: Number(tf.valley) > 0 ? Number(tf.valley) : 0.3,
+      deep: Number(tf.deep) > 0 ? Number(tf.deep) : 0.1
+    })
     const exp = parseFloat(expected)
     if (consumption && !isNaN(exp) && exp > 0) {
-      const pr = computePrices(consumption, grp, exp)
-      setGroups(grp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); renderChart(consumption, pr.pricePerHour)
+      const pr = computePrices(consumption, grp, exp, {
+        flat: Number(tf.flat) > 0 ? Number(tf.flat) : defaultFactors.flat,
+        spike: Number(tf.spike) > 0 ? Number(tf.spike) : defaultFactors.spike,
+        peak: Number(tf.peak) > 0 ? Number(tf.peak) : defaultFactors.peak,
+        valley: Number(tf.valley) > 0 ? Number(tf.valley) : defaultFactors.valley,
+        deep: Number(tf.deep) > 0 ? Number(tf.deep) : defaultFactors.deep
+      })
+      setGroups(grp); setBasePrices(pr); setPrices(pr); renderChart(consumption, pr.pricePerHour)
     } else {
-      setGroups(grp); setBasePrices(null); setPrices(null); setAdjustSelected([]); setAdjustGroups([])
+      setGroups(grp); setBasePrices(null); setPrices(null)
     }
   }
 
-  function recomputeWithGroups() {
-    if (!basePrices || !consumption) return;
-    let pph = basePrices.pricePerHour.slice();
-    for (const g of adjustGroups) {
-      const priceSet = parseFloat(g.setPrice);
-      const factor = parseFloat(g.factor);
-      for (const i of g.cols) {
-        if (pph[i] === undefined) continue;
-        let current = pph[i];
-        if (!isNaN(priceSet) && priceSet > 0) {
-          current = priceSet;
-        }
-        if (!isNaN(factor) && factor > 0) {
-          current = current * factor;
-        }
-        pph[i] = current;
-      }
+  function updateFactors(next) {
+    setFactors(next)
+    const exp = parseFloat(expected)
+    if (consumption && groups && !isNaN(exp) && exp > 0) {
+      const pr = computePrices(consumption, groups, exp, next)
+      setBasePrices(pr); setPrices(pr); renderChart(consumption, pr.pricePerHour)
     }
-    let revenue = 0; for (let i = 0; i < consumption.length; i++) revenue += consumption[i] * pph[i];
-    setPrices({ ...basePrices, pricePerHour: pph, revenue });
   }
 
-  useEffect(() => { recomputeWithGroups() }, [adjustGroups, basePrices, consumption]);
-
-  function addSelectionAsGroup() {
-    if (!adjustSelected.length) return;
-    const id = 'g' + groupCounterRef.current++;
-    const cols = Array.from(new Set(adjustSelected)).sort((a, b) => a - b);
-    setAdjustGroups([...adjustGroups, { id, cols, setPrice: '', factor: '' }]);
-    setAdjustSelected([]);
-    lastSelIdxRef.current = null;
-  }
-
-  function removeGroup(id) {
-    setAdjustGroups(adjustGroups.filter(g => g.id !== id));
-  }
-
-  function clearAllGroups() {
-    setAdjustGroups([]);
-    setAdjustSelected([]);
-    lastSelIdxRef.current = null;
-    if (basePrices) setPrices(basePrices);
+  function resetFactors() {
+    updateFactors(defaultFactors)
   }
 
   return (
@@ -470,7 +450,7 @@ export default function IndexPage() {
 
             <div className={styles.field} style={{ marginTop: '16px' }}>
               <label htmlFor="expectedRevenue">期望总收入（元）</label>
-              <input id="expectedRevenue" type="number" step="0.01" value={expected} onChange={e => { setExpected(e.target.value); if (consumption && groups) { const exp = parseFloat(e.target.value); if (!isNaN(exp) && exp > 0) { const pr = computePrices(consumption, groups, exp); setBasePrices(pr); setPrices(pr); setAdjustSelected([]); setAdjustGroups([]); } } }} placeholder="例如 100000" />
+              <input id="expectedRevenue" type="number" step="0.01" value={expected} onChange={e => { setExpected(e.target.value); if (consumption && groups) { const exp = parseFloat(e.target.value); if (!isNaN(exp) && exp > 0) { const pr = computePrices(consumption, groups, exp, factors); setBasePrices(pr); setPrices(pr); } } }} placeholder="例如 100000" />
             </div>
 
             <div style={{ marginTop: '24px' }}>
@@ -486,54 +466,28 @@ export default function IndexPage() {
         <section className={styles.results}>
           <div className={styles.summary}>
             <div className={styles.card}><div className={styles.cardTitle}>当前范围</div><div className={styles.cardValue}>{scope}</div></div>
-            <div className={styles.card}><div className={styles.cardTitle}>谷电价</div><div className={styles.cardValue}>{fmt(prices.pLow)}</div></div>
-            <div className={styles.card}><div className={styles.cardTitle}>平电价</div><div className={styles.cardValue}>{fmt(prices.pMid)}</div></div>
-            <div className={styles.card}><div className={styles.cardTitle}>峰电价</div><div className={styles.cardValue}>{fmt(prices.pHigh)}</div></div>
+            <div className={styles.card}><div className={styles.cardTitle}>深谷电价</div><div className={styles.cardValue}>{fmt(prices.pDeep)}</div></div>
+            <div className={styles.card}><div className={styles.cardTitle}>谷电价</div><div className={styles.cardValue}>{fmt(prices.pValley)}</div></div>
+            <div className={styles.card}><div className={styles.cardTitle}>平电价</div><div className={styles.cardValue}>{fmt(prices.pFlat)}</div></div>
+            <div className={styles.card}><div className={styles.cardTitle}>峰电价</div><div className={styles.cardValue}>{fmt(prices.pPeak)}</div></div>
+            <div className={styles.card}><div className={styles.cardTitle}>尖峰电价</div><div className={styles.cardValue}>{fmt(prices.pSpike)}</div></div>
             <div className={styles.card}><div className={styles.cardTitle}>总收入（元）</div><div className={styles.cardValue}>{fmtMoney(prices.revenue)}</div></div>
           </div>
 
           <h2 style={{ marginTop: '32px' }}>分时电价详情</h2>
 
-          {/* Grouping & Adjustment moved here */}
           <div className={styles.adjustSection}>
-            <div className={styles.groupHeader} style={{ borderBottom: 'none', marginBottom: '12px' }}>微调工具：分组与调整</div>
-            <div className={styles.controlRow}>
-              <div className={styles.field} style={{ flex: 2 }}>
-                <label>1. 在下方表格点击表头选择时间段 (支持Shift连选)</label>
-                <div className={styles.fileName} style={{ marginTop: 8, padding: '8px', background: '#fff', border: '1px solid #cbd5e1', borderRadius: '6px', minHeight: '38px', display: 'flex', alignItems: 'center' }}>
-                  {adjustSelected.length ? `已选：${adjustSelected.map(i => `${i + 1}点`).join('、')}` : <span style={{ color: '#9ca3af' }}>未选择时间段</span>}
-                </div>
-              </div>
-              <div className={styles.field} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-end', justifyContent: 'flex-start', paddingBottom: 2 }}>
-                <button className={styles.secondaryButton} disabled={!adjustSelected.length} onClick={addSelectionAsGroup}>2. 添加为调整组</button>
-                <button className={styles.secondaryButton} onClick={clearAllGroups}>清除全部</button>
-              </div>
+            <div className={styles.groupHeader} style={{ borderBottom: 'none', marginBottom: '12px' }}>系数调整（尖峰/峰/谷/深谷）</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(160px, 1fr))', gap: 12 }}>
+              <div className={styles.field}><label>尖峰系数</label><input type="number" step="0.01" value={factors.spike} onChange={e => updateFactors({ ...factors, spike: e.target.value })} /></div>
+              <div className={styles.field}><label>峰系数</label><input type="number" step="0.01" value={factors.peak} onChange={e => updateFactors({ ...factors, peak: e.target.value })} /></div>
+              <div className={styles.field}><label>谷系数</label><input type="number" step="0.01" value={factors.valley} onChange={e => updateFactors({ ...factors, valley: e.target.value })} /></div>
+              <div className={styles.field}><label>深谷系数</label><input type="number" step="0.01" value={factors.deep} onChange={e => updateFactors({ ...factors, deep: e.target.value })} /></div>
             </div>
-
-            {adjustGroups.length > 0 && (
-              <div className={styles.groupList}>
-                {adjustGroups.map((g, idx) => (
-                  <div key={g.id} className={styles.groupItem}>
-                    <div style={{ minWidth: 60, fontWeight: 600, color: '#475569' }}>组 {idx + 1}</div>
-                    <div style={{ flex: 1, minWidth: 200, fontSize: 14, color: '#475569' }}>
-                      <span style={{ color: '#64748b', marginRight: 8 }}>包含:</span>
-                      {g.cols.map(i => `${i + 1}点`).join('、')}
-                    </div>
-                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ fontSize: 12, color: '#64748b' }}>固定价:</span>
-                        <input type="number" step="0.01" value={g.setPrice} onChange={e => { const v = e.target.value; setAdjustGroups(adjustGroups.map(x => x.id === g.id ? { ...x, setPrice: v } : x)) }} placeholder="未设置" style={{ padding: '6px', border: '1px solid #d1d5db', borderRadius: 4, width: 80 }} />
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ fontSize: 12, color: '#64748b' }}>倍率:</span>
-                        <input type="number" step="0.01" value={g.factor} onChange={e => { const v = e.target.value; setAdjustGroups(adjustGroups.map(x => x.id === g.id ? { ...x, factor: v } : x)) }} placeholder="1.0" style={{ padding: '6px', border: '1px solid #d1d5db', borderRadius: 4, width: 60 }} />
-                      </div>
-                      <button className={styles.secondaryButton} onClick={() => removeGroup(g.id)} style={{ padding: '6px 10px', color: '#ef4444', borderColor: '#fee2e2', background: '#fef2f2', fontSize: 12 }}>删除</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div style={{ display: 'flex', gap: 12, marginTop: 12, alignItems: 'center' }}>
+              <span className={styles.fileName}>平系数固定为 1</span>
+              <button className={styles.secondaryButton} onClick={resetFactors}>重置默认系数</button>
+            </div>
           </div>
 
           {renderTable()}

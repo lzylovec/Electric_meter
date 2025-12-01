@@ -5,7 +5,7 @@ import styles from './index.module.css'
 export default function RulesPage() {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [months, setMonths] = useState(() => Array.from({ length: 12 }, () => ({ count: 3, peaks: [], valleys: [] })))
+  const [months, setMonths] = useState(() => Array.from({ length: 12 }, () => ({ count: 3, peaks: [], valleys: [], spikes: [], deeps: [] })))
   const [monthIdx, setMonthIdx] = useState(0)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
@@ -13,23 +13,40 @@ export default function RulesPage() {
   const [selectedId, setSelectedId] = useState('')
   const [loading, setLoading] = useState(false)
   const hours = useMemo(() => Array.from({ length: 24 }, (_, i) => i), [])
+  const [factors, setFactors] = useState({ flat: 1, spike: 2, peak: 1.7, valley: 0.3, deep: 0.1 })
 
   function labelOf(i) {
     const m = months[monthIdx]
-    if (m.peaks.includes(i)) return '峰'
-    if (m.valleys.includes(i)) return '谷'
+    const peaks = Array.isArray(m.peaks) ? m.peaks : []
+    const valleys = Array.isArray(m.valleys) ? m.valleys : []
+    const spikes = Array.isArray(m.spikes) ? m.spikes : []
+    const deeps = Array.isArray(m.deeps) ? m.deeps : []
+    if (spikes.includes(i)) return '尖峰'
+    if (peaks.includes(i)) return '峰'
+    if (valleys.includes(i)) return '谷'
+    if (deeps.includes(i)) return '深谷'
     return '平'
   }
 
   function toggleHour(i) {
     const m = months[monthIdx]
-    const peaks = new Set(m.peaks)
-    const valleys = new Set(m.valleys)
+    const peaks = new Set(Array.isArray(m.peaks) ? m.peaks : [])
+    const valleys = new Set(Array.isArray(m.valleys) ? m.valleys : [])
+    const spikes = new Set(Array.isArray(m.spikes) ? m.spikes : [])
+    const deeps = new Set(Array.isArray(m.deeps) ? m.deeps : [])
     const cur = labelOf(i)
-    if (cur === '平') { peaks.add(i); valleys.delete(i) }
-    else if (cur === '峰') { peaks.delete(i); valleys.add(i) }
-    else { peaks.delete(i); valleys.delete(i) }
-    const next = { ...m, peaks: Array.from(peaks).sort((a, b) => a - b), valleys: Array.from(valleys).sort((a, b) => a - b) }
+    if (cur === '平') { spikes.add(i); peaks.delete(i); valleys.delete(i); deeps.delete(i) }
+    else if (cur === '尖峰') { spikes.delete(i); peaks.add(i); valleys.delete(i); deeps.delete(i) }
+    else if (cur === '峰') { spikes.delete(i); peaks.delete(i); valleys.add(i); deeps.delete(i) }
+    else if (cur === '谷') { spikes.delete(i); peaks.delete(i); valleys.delete(i); deeps.add(i) }
+    else { spikes.delete(i); peaks.delete(i); valleys.delete(i); deeps.delete(i) }
+    const next = {
+      ...m,
+      peaks: Array.from(peaks).sort((a, b) => a - b),
+      valleys: Array.from(valleys).sort((a, b) => a - b),
+      spikes: Array.from(spikes).sort((a, b) => a - b),
+      deeps: Array.from(deeps).sort((a, b) => a - b)
+    }
     const arr = months.slice(); arr[monthIdx] = next; setMonths(arr)
   }
 
@@ -42,7 +59,7 @@ export default function RulesPage() {
 
   function clearCurrentMonth() {
     const m = months[monthIdx]
-    const next = { ...m, peaks: [], valleys: [] }
+    const next = { ...m, peaks: [], valleys: [], spikes: [], deeps: [] }
     const arr = months.slice(); arr[monthIdx] = next; setMonths(arr)
   }
 
@@ -52,7 +69,7 @@ export default function RulesPage() {
     if (!supabase) { setMsg('未配置 Supabase，无法保存模板'); return }
     setSaving(true)
     try {
-      const { error } = await supabase.from('rule_templates').insert([{ name, description, months }])
+      const { error } = await supabase.from('rule_templates').insert([{ name, description, months, factors }])
       if (error) { setMsg(error.message || '保存失败'); setSaving(false); return }
       setMsg('已保存模板')
       setSaving(false)
@@ -62,6 +79,7 @@ export default function RulesPage() {
       // Simple behavior: reload list, reset form.
       setName('')
       setDescription('')
+      setFactors({ flat: 1, spike: 2, peak: 1.7, valley: 0.3, deep: 0.1 })
       await loadTemplates()
     } catch (e) {
       setMsg(String(e && e.message ? e.message : e))
@@ -74,7 +92,7 @@ export default function RulesPage() {
     setMsg('')
     try {
       if (!supabase) { setMsg('未配置 Supabase'); setLoading(false); return }
-      const { data, error } = await supabase.from('rule_templates').select('id,name,description,months,created_at').order('created_at', { ascending: false })
+      const { data, error } = await supabase.from('rule_templates').select('id,name,description,months,factors,created_at').order('created_at', { ascending: false })
       if (error) { setMsg(error.message || '读取模板失败'); setLoading(false); return }
       setTemplates(Array.isArray(data) ? data : [])
       setLoading(false)
@@ -92,8 +110,16 @@ export default function RulesPage() {
     setName(tpl.name || '')
     setDescription(tpl.description || '')
     try {
-      const m = Array.isArray(tpl.months) && tpl.months.length === 12 ? tpl.months : Array.from({ length: 12 }, () => ({ count: 3, peaks: [], valleys: [] }))
+      const m = Array.isArray(tpl.months) && tpl.months.length === 12 ? tpl.months : Array.from({ length: 12 }, () => ({ count: 3, peaks: [], valleys: [], spikes: [], deeps: [] }))
       setMonths(m)
+      const f = tpl.factors || {}
+      setFactors({
+        flat: parseFloat(f.flat) > 0 ? parseFloat(f.flat) : 1,
+        spike: parseFloat(f.spike) > 0 ? parseFloat(f.spike) : 2,
+        peak: parseFloat(f.peak) > 0 ? parseFloat(f.peak) : 1.7,
+        valley: parseFloat(f.valley) > 0 ? parseFloat(f.valley) : 0.3,
+        deep: parseFloat(f.deep) > 0 ? parseFloat(f.deep) : 0.1
+      })
     } catch {
       setMsg('模板数据格式异常')
     }
@@ -103,7 +129,8 @@ export default function RulesPage() {
     setSelectedId('')
     setName('')
     setDescription('')
-    setMonths(Array.from({ length: 12 }, () => ({ count: 3, peaks: [], valleys: [] })))
+    setMonths(Array.from({ length: 12 }, () => ({ count: 3, peaks: [], valleys: [], spikes: [], deeps: [] })))
+    setFactors({ flat: 1, spike: 2, peak: 1.7, valley: 0.3, deep: 0.1 })
     setMsg('已切换到新建模式')
   }
 
@@ -113,7 +140,7 @@ export default function RulesPage() {
     if (!supabase) { setMsg('未配置 Supabase'); return }
     setSaving(true)
     try {
-      const { error } = await supabase.from('rule_templates').update({ name, description, months }).eq('id', selectedId)
+      const { error } = await supabase.from('rule_templates').update({ name, description, months, factors }).eq('id', selectedId)
       if (error) { setMsg(error.message || '更新失败'); setSaving(false); return }
       setMsg('模板已更新')
       setSaving(false)
@@ -145,6 +172,34 @@ export default function RulesPage() {
   }
 
   useEffect(() => { loadTemplates() }, [])
+
+  async function exportExcelTemplate() {
+    try {
+      const XLSX = await import('xlsx')
+      const header = ['时段数', ...Array.from({ length: 12 }, (_, i) => `${i + 1}月`)]
+      const aoa = [header]
+      for (let h = 1; h <= 24; h++) {
+        const row = [h]
+        for (let m = 0; m < 12; m++) {
+          const cfg = months[m] || { peaks: [], valleys: [], spikes: [], deeps: [], count: 3 }
+          const label = (Array.isArray(cfg.spikes) && cfg.spikes.includes(h - 1)) ? '尖峰' : (Array.isArray(cfg.peaks) && cfg.peaks.includes(h - 1)) ? '峰' : (Array.isArray(cfg.valleys) && cfg.valleys.includes(h - 1)) ? '谷' : (Array.isArray(cfg.deeps) && cfg.deeps.includes(h - 1)) ? '深谷' : '平'
+          row.push(label)
+        }
+        aoa.push(row)
+      }
+      const wb = XLSX.utils.book_new()
+      const ws = XLSX.utils.aoa_to_sheet(aoa)
+      ws['!cols'] = [{ wch: 8 }, ...Array(12).fill({ wch: 10 })]
+      XLSX.utils.book_append_sheet(wb, ws, '时段模板')
+      const ts = new Date(); const pad = n => String(n).padStart(2, '0')
+      const nameSafe = (name || '规则模板').replace(/[\\/:*?"<>|]/g, '-')
+      const fileName = `时段模板-${nameSafe}-${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}.xlsx`
+      XLSX.writeFile(wb, fileName)
+      setMsg('已导出 Excel 模板')
+    } catch (e) {
+      setMsg(String(e && e.message ? e.message : e))
+    }
+  }
 
   return (
     <div className={styles.container}>
@@ -204,6 +259,7 @@ export default function RulesPage() {
               ) : (
                 <button className={styles.actionButton} disabled={saving} onClick={saveTemplate}>保存模板</button>
               )}
+              <button className={styles.secondaryButton} disabled={saving} onClick={exportExcelTemplate}>导出Excel模板</button>
             </div>
           </div>
 
@@ -233,16 +289,29 @@ export default function RulesPage() {
             {/* Left Sidebar: Settings */}
             <div className={styles.configSidebar}>
               <div className={styles.field}>
-                <label>峰谷数量 (个)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="11"
-                  value={months[monthIdx].count}
-                  onChange={e => setCount(e.target.value)}
-                  style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0' }}
-                />
-                <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>设置该月份每天的峰谷时段总数</div>
+                <label>电价系数配置</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ width: 60, fontWeight: 500, color: '#b91c1c' }}>尖峰</span>
+                    <input type="number" step="0.01" value={factors.spike} onChange={e => setFactors({ ...factors, spike: e.target.value })} style={{ width: 100, padding: '4px 8px', borderRadius: 4, border: '1px solid #cbd5e1' }} />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ width: 60, fontWeight: 500, color: '#ef4444' }}>峰</span>
+                    <input type="number" step="0.01" value={factors.peak} onChange={e => setFactors({ ...factors, peak: e.target.value })} style={{ width: 100, padding: '4px 8px', borderRadius: 4, border: '1px solid #cbd5e1' }} />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ width: 60, fontWeight: 500, color: '#64748b' }}>平</span>
+                    <input type="number" disabled value={1} style={{ width: 100, background: '#f1f5f9', color: '#94a3b8', padding: '4px 8px', borderRadius: 4, border: '1px solid #cbd5e1' }} />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ width: 60, fontWeight: 500, color: '#10b981' }}>谷</span>
+                    <input type="number" step="0.01" value={factors.valley} onChange={e => setFactors({ ...factors, valley: e.target.value })} style={{ width: 100, padding: '4px 8px', borderRadius: 4, border: '1px solid #cbd5e1' }} />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ width: 60, fontWeight: 500, color: '#0ea5e9' }}>深谷</span>
+                    <input type="number" step="0.01" value={factors.deep} onChange={e => setFactors({ ...factors, deep: e.target.value })} style={{ width: 100, padding: '4px 8px', borderRadius: 4, border: '1px solid #cbd5e1' }} />
+                  </div>
+                </div>
               </div>
 
               <div className={styles.field}>
@@ -260,12 +329,13 @@ export default function RulesPage() {
             {/* Right Content: Time Grid */}
             <div>
               <div style={{ marginBottom: 12, fontSize: 14, fontWeight: 500, color: '#475569' }}>
-                点击时间段切换状态：<span style={{ color: '#64748b' }}>平</span> → <span style={{ color: '#ef4444' }}>峰</span> → <span style={{ color: '#10b981' }}>谷</span>
+                点击时间段切换状态：<span style={{ color: '#64748b' }}>平</span> → <span style={{ color: '#b91c1c' }}>尖峰</span> → <span style={{ color: '#ef4444' }}>峰</span> → <span style={{ color: '#10b981' }}>谷</span> → <span style={{ color: '#0ea5e9' }}>深谷</span>
               </div>
               <div className={styles.timeGrid}>
                 {hours.map(i => {
                   const label = labelOf(i)
-                  const cls = label === '峰' ? styles.levelHigh : (label === '谷' ? styles.levelLow : styles.levelMid)
+                  const clsMap = { '尖峰': styles.levelSpike, '峰': styles.levelPeak, '平': styles.levelFlat, '谷': styles.levelValley, '深谷': styles.levelDeep }
+                  const cls = clsMap[label] || styles.levelFlat
                   return (
                     <div
                       key={i}
