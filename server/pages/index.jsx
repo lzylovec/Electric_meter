@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
+import Link from 'next/link';
 import styles from './index.module.css';
 import { supabase } from '../lib/supabase'
+import { useCalculation } from '../lib/CalculationContext';
 
 
 function fmt(n) { if (!isFinite(n)) return '--'; return Number(n).toFixed(4) }
@@ -73,29 +75,32 @@ function mergeTemplate(cons, tplMonth) {
 }
 
 export default function IndexPage() {
-  const [file, setFile] = useState(null);
-  const [fileName, setFileName] = useState('');
-  const [expected, setExpected] = useState('');
-  const [parsed, setParsed] = useState(null);
-  const [months, setMonths] = useState([]);
-  const [monthIdx, setMonthIdx] = useState(0);
-  const [scope, setScope] = useState('汇总(全部)');
-  const [consumption, setConsumption] = useState(null);
-  const [groups, setGroups] = useState(null);
-  const [basePrices, setBasePrices] = useState(null);
-  const [prices, setPrices] = useState(null);
-  const [companies, setCompanies] = useState([]);
-  const [selected, setSelected] = useState('__all__');
-  const [error, setError] = useState('');
+  const {
+    file, setFile,
+    fileName, setFileName,
+    expected, setExpected,
+    parsed, setParsed,
+    months, setMonths,
+    monthIdx, setMonthIdx,
+    scope, setScope,
+    consumption, setConsumption,
+    groups, setGroups,
+    basePrices, setBasePrices,
+    prices, setPrices,
+    companies, setCompanies,
+    selected, setSelected,
+    error, setError,
+    peakValleyCount, setPeakValleyCount,
+    calendarConfigs, setCalendarConfigs,
+    currentCalendarMonth, setCurrentCalendarMonth,
+    templates, setTemplates,
+    templateSelectedId, setTemplateSelectedId,
+    factors, setFactors
+  } = useCalculation();
+
   const chartRef = useRef(null); const chartInstance = useRef(null);
-  const [peakValleyCount, setPeakValleyCount] = useState(3);
-  const [calendarConfigs, setCalendarConfigs] = useState(() => Array(12).fill(3));
-  const [currentCalendarMonth, setCurrentCalendarMonth] = useState(0); // 0 for Jan, 11 for Dec
   const lastSelIdxRef = useRef(null);
   const groupCounterRef = useRef(1);
-  const [templates, setTemplates] = useState([])
-  const [templateSelectedId, setTemplateSelectedId] = useState('')
-  const [factors, setFactors] = useState(defaultFactors)
 
   async function parseViaBackend(f) {
     const fd = new FormData(); fd.append('file', f);
@@ -315,32 +320,6 @@ export default function IndexPage() {
     }
   }, []);
 
-  // Load calendar configs from browser and save on change
-  useEffect(() => {
-    try {
-      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('calendarConfigs') : null;
-      if (raw) {
-        const arr = JSON.parse(raw);
-        if (Array.isArray(arr) && arr.length === 12) {
-          const fixed = arr.map(v => {
-            const n = parseInt(v, 10);
-            return (!isNaN(n) && n > 0 && n * 2 <= 24) ? n : 3;
-          });
-          setCalendarConfigs(fixed);
-          const c = fixed[currentCalendarMonth] || 3;
-          setPeakValleyCount(c);
-        }
-      }
-    } catch { }
-  }, []);
-
-  useEffect(() => {
-    try {
-      if (Array.isArray(calendarConfigs) && calendarConfigs.length === 12) {
-        window.localStorage.setItem('calendarConfigs', JSON.stringify(calendarConfigs));
-      }
-    } catch { }
-  }, [calendarConfigs]);
 
   useEffect(() => {
     async function loadTemplates() {
@@ -441,7 +420,7 @@ export default function IndexPage() {
                   <option value="">未选择 (默认3档)</option>
                   {templates.map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
                 </select>
-                <a className={styles.secondaryButton} href="/rules" target="_blank" rel="noopener noreferrer">管理</a>
+                <Link href="/rules" className={styles.secondaryButton}>管理</Link>
               </div>
               {!supabase && (
                 <div className={styles.error} style={{ fontSize: '12px', padding: '8px' }}>未配置 Supabase，模板不可用。</div>

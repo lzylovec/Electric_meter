@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { supabase } from '../lib/supabase'
 import styles from './index.module.css'
 
@@ -205,7 +206,7 @@ export default function RulesPage() {
     <div className={styles.container}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1 className={styles.title} style={{ margin: 0 }}>规则管理</h1>
-        <a href="/" className={styles.secondaryButton}>返回首页</a>
+        <Link href="/" className={styles.secondaryButton}>返回首页</Link>
       </div>
 
       <div className={styles.rulesContainer}>
