@@ -7,16 +7,15 @@ import { useCalculation } from '../lib/CalculationContext';
 
 function fmt(n) { if (!isFinite(n)) return '--'; return Number(n).toFixed(4) }
 function fmtMoney(n) { if (!isFinite(n)) return '--'; return Number(n).toFixed(2) }
-function hours() { return Array.from({ length: 24 }, (_, i) => `${i + 1}点`) }
+function hours() { return Array.from({ length: 24 }, (_, i) => `${i}点`) }
 const defaultFactors = { flat: 1, spike: 2, peak: 1.7, valley: 0.3, deep: 0.1 }
 
 function classify(cons, count = 3) {
-  const idx = cons.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v).map(x => x.i);
-  const high = new Set(idx.slice(0, count));
-  const low = new Set(idx.slice(24 - count));
-  const mid = new Set(idx.slice(count, 24 - count));
-  const labels = cons.map((_, i) => high.has(i) ? '峰' : (mid.has(i) ? '平' : '谷'));
-  return { labels, high, mid, low };
+  const labels = Array.from({ length: 24 }, () => '平')
+  const high = new Set()
+  const low = new Set()
+  const mid = new Set(Array.from({ length: 24 }, (_, i) => i))
+  return { labels, high, mid, low }
 }
 
 function computePrices(cons, groups, expected, f = defaultFactors) {
@@ -40,33 +39,11 @@ function computePrices(cons, groups, expected, f = defaultFactors) {
 }
 
 function mergeTemplate(cons, tplMonth) {
-  const cntRaw = tplMonth && tplMonth.count !== undefined ? parseInt(tplMonth.count, 10) : NaN
-  const cnt = (!isNaN(cntRaw) && cntRaw > 0) ? cntRaw : 3
   const toIdx = arr => (Array.isArray(arr) ? arr : []).map(i => parseInt(i, 10)).filter(i => !isNaN(i) && i >= 0 && i < 24)
   const spikes = new Set(toIdx(tplMonth && tplMonth.spikes))
   const peaks = new Set(toIdx(tplMonth && tplMonth.peaks))
   const valleys = new Set(toIdx(tplMonth && tplMonth.valleys))
   const deeps = new Set(toIdx(tplMonth && tplMonth.deeps))
-  const used = new Set([...spikes, ...peaks, ...valleys, ...deeps])
-  const remain = Array.from({ length: 24 }, (_, i) => i).filter(i => !used.has(i))
-  if (Array.isArray(cons)) {
-    const desc = remain.map(i => ({ i, v: cons[i] })).sort((a, b) => b.v - a.v)
-    for (const x of desc) { if (spikes.size < Math.max(1, Math.floor(cnt / 2))) spikes.add(x.i) }
-    const afterSpike = remain.filter(i => !spikes.has(i))
-    const desc2 = afterSpike.map(i => ({ i, v: cons[i] })).sort((a, b) => b.v - a.v)
-    for (const x of desc2) { if (peaks.size < cnt) peaks.add(x.i) }
-    const afterPeak = remain.filter(i => !spikes.has(i) && !peaks.has(i))
-    const asc = afterPeak.map(i => ({ i, v: cons[i] })).sort((a, b) => a.v - b.v)
-    for (const x of asc) { if (deeps.size < Math.max(1, Math.floor(cnt / 2))) deeps.add(x.i) }
-    const afterDeep = afterPeak.filter(i => !deeps.has(i))
-    const asc2 = afterDeep.map(i => ({ i, v: cons[i] })).sort((a, b) => a.v - b.v)
-    for (const x of asc2) { if (valleys.size < cnt) valleys.add(x.i) }
-  } else {
-    for (const i of remain) { if (spikes.size < Math.max(1, Math.floor(cnt / 2))) spikes.add(i) }
-    for (const i of remain) { if (!spikes.has(i) && peaks.size < cnt) peaks.add(i) }
-    for (const i of remain) { if (!spikes.has(i) && !peaks.has(i) && deeps.size < Math.max(1, Math.floor(cnt / 2))) deeps.add(i) }
-    for (const i of remain) { if (!spikes.has(i) && !peaks.has(i) && !deeps.has(i) && valleys.size < cnt) valleys.add(i) }
-  }
   const labels = Array.from({ length: 24 }, (_, i) => (spikes.has(i) ? '尖峰' : (peaks.has(i) ? '峰' : (valleys.has(i) ? '谷' : (deeps.has(i) ? '深谷' : '平')))))
   const mid = new Set(labels.map((l, i) => l === '平' ? i : -1).filter(i => i >= 0))
   const spike = new Set(labels.map((l, i) => l === '尖峰' ? i : -1).filter(i => i >= 0))
@@ -259,15 +236,17 @@ export default function IndexPage() {
     setMonths(data.months);
     setMonthIdx(0);
     setParsed(data);
-    setCompanies(data.months[0].companies || []);
-    setSelected('__all__');
-    setScope(`汇总(${data.months[0].name})`);
+    const comps = data.months[0].companies || []
+    setCompanies(comps);
+    if (!Array.isArray(comps) || comps.length === 0) { setError('未找到企业行数据'); return }
+    setSelected('0');
+    setScope(`${data.months[0].name}-${comps[0].name}`);
 
     // Use the count for the currently selected calendar month (default Jan/0)
     const initialCount = calendarConfigs[currentCalendarMonth] || 3;
     setPeakValleyCount(initialCount);
 
-    const cons = data.months[0].sums;
+    const cons = comps[0].values;
     let grp = null
     if (templateSelectedId) {
       const tpl = templates.find(t => t.id === templateSelectedId)
@@ -287,7 +266,7 @@ export default function IndexPage() {
     if (!months.length) return; const exp = parseFloat(expected); if (isNaN(exp) || exp <= 0) return;
     let cons = null; let scope = '';
     const m = months[monthIdx]; if (!m) return;
-    if (sel === '__all__') { cons = m.sums; scope = `汇总(${m.name})` } else { const idx = parseInt(sel, 10); if (isNaN(idx) || !m.companies[idx]) return; cons = m.companies[idx].values; scope = `${m.name}-${m.companies[idx].name}` }
+    const idx = parseInt(sel, 10); if (isNaN(idx) || !m.companies[idx]) return; cons = m.companies[idx].values; scope = `${m.name}-${m.companies[idx].name}`
     let grp = null
     if (templateSelectedId) {
       const tpl = templates.find(t => t.id === templateSelectedId)
@@ -401,7 +380,6 @@ export default function IndexPage() {
             <div className={styles.field} style={{ marginTop: '16px' }}>
               <label htmlFor="dataScope">数据范围</label>
               <select id="dataScope" value={selected} onChange={e => { const val = e.target.value; setSelected(val); recomputeForSelection(val) }}>
-                <option value="__all__">汇总</option>
                 {companies.map((c, i) => (<option key={i} value={String(i)}>{c.name}</option>))}
               </select>
             </div>
@@ -417,7 +395,7 @@ export default function IndexPage() {
               <label htmlFor="ruleTemplate">规则模板</label>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <select id="ruleTemplate" style={{ flex: 1 }} value={templateSelectedId} onChange={e => setTemplateSelectedId(e.target.value)}>
-                  <option value="">未选择 (默认3档)</option>
+                  <option value="">未选择 (全部平)</option>
                   {templates.map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
                 </select>
                 <Link href="/rules" className={styles.secondaryButton}>管理</Link>
